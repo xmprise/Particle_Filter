@@ -83,6 +83,10 @@ void ParticleFilter::updateWeights(double sensor_range, double std_landmark[],
 	//   3.33. Note that you'll need to switch the minus sign in that equation to a plus to account 
 	//   for the fact that the map's y-axis actually points downwards.)
 	//   http://planning.cs.uiuc.edu/node99.html
+
+    double var_xx = std_landmark[0] * std_landmark[0];
+    double var_yy = std_landmark[1] * std_landmark[1];
+
 }
 
 void ParticleFilter::resample() {
