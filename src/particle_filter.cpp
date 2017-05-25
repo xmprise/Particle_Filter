@@ -1,10 +1,3 @@
-/*
- * particle_filter.cpp
- *
- *  Created on: Dec 12, 2016
- *      Author: Tiffany Huang
- */
-
 #include <random>
 #include <algorithm>
 #include <iostream>
@@ -14,19 +7,21 @@
 using namespace std;
 
 void ParticleFilter::init(double x, double y, double theta, double std[]) {
-	// TODO: Set the number of particles. Initialize all particles to first position (based on estimates of 
-	//   x, y, theta and their uncertainties from GPS) and all weights to 1. 
+	// TODO: Set the number of particles. Initialize all particles to first position (based on estimates of
+	//   x, y, theta and their uncertainties from GPS) and all weights to 1.
 	// Add random Gaussian noise to each particle.
 	// NOTE: Consult particle_filter.h for more information about this method (and others in this file).
 
-    num_particles = 100;
-    double weights = 1.0;
+    num_particles = 50;
+    weights.resize(num_particles);
+    particles.resize(num_particles);
 
     // define normal distribution for sensor noise
-    default_random_engine gen;
-    normal_distribution<double> N_x_init(0, std[0]); // simulated estimate from GPS
-    normal_distribution<double> N_y_init(0, std[1]);
-    normal_distribution<double> N_theta_init(0, std[2]);
+    random_device rd;
+    default_random_engine gen(rd());
+    normal_distribution<double> N_x_init(x, std[0]); // simulated estimate from GPS
+    normal_distribution<double> N_y_init(y, std[1]);
+    normal_distribution<double> N_theta_init(theta, std[2]);
 
     // init particle
     for(int i =0; i < num_particles; i++) {
@@ -34,7 +29,8 @@ void ParticleFilter::init(double x, double y, double theta, double std[]) {
         particles[i].x = N_x_init(gen);
         particles[i].y = N_y_init(gen);
         particles[i].theta = N_theta_init(gen);
-        particles[i].weight = weights;
+        particles[i].weight = 1.d;
+        weights[i] = particles[i].weight;
     }
     is_initialized = true;
 }
@@ -46,15 +42,16 @@ void ParticleFilter::prediction(double delta_t, double std_pos[], double velocit
 	//  http://www.cplusplus.com/reference/random/default_random_engine/
 
     for(int i = 0; i < num_particles; i++) {
-        particles[i].x += velocity / yaw_rate * (sin(particles[i].theta + delta_t*yaw_rate) - sin(particles[i].theta));
-        particles[i].y += velocity / yaw_rate * (cos(particles[i].theta) - cos(particles[i].theta + yaw_rate * delta_t));
-        particles[i].theta += yaw_rate * delta_t;
+        double x_new = particles[i].x + velocity / yaw_rate * (sin(particles[i].theta + yaw_rate * delta_t) - sin(particles[i].theta));
+        double y_new = particles[i].y + velocity / yaw_rate * (cos(particles[i].theta) - cos(particles[i].theta + yaw_rate * delta_t));
+        double theta_new = particles[i].theta + yaw_rate * delta_t;
 
         // define normal distribution for sensor noise
-        default_random_engine gen;
-        normal_distribution<double> N_x(particles[i].x, std_pos[0]);
-        normal_distribution<double> N_y(particles[i].y, std_pos[1]);
-        normal_distribution<double> N_theta(particles[i].theta, std_pos[2]);
+        random_device rd;
+        default_random_engine gen(rd());
+        normal_distribution<double> N_x(x_new, std_pos[0]);
+        normal_distribution<double> N_y(y_new, std_pos[1]);
+        normal_distribution<double> N_theta(theta_new, std_pos[2]);
 
         particles[i].x = N_x(gen);
         particles[i].y = N_y(gen);
@@ -70,7 +67,7 @@ void ParticleFilter::dataAssociation(std::vector<LandmarkObs> predicted, std::ve
 
 }
 
-void ParticleFilter::updateWeights(double sensor_range, double std_landmark[], 
+void ParticleFilter::updateWeights(double sensor_range, double std_landmark[],
 		std::vector<LandmarkObs> observations, Map map_landmarks) {
 	// TODO: Update the weights of each particle using a mult-variate Gaussian distribution. You can read
 	//   more about this distribution here: https://en.wikipedia.org/wiki/Multivariate_normal_distribution
@@ -79,20 +76,68 @@ void ParticleFilter::updateWeights(double sensor_range, double std_landmark[],
 	//   Keep in mind that this transformation requires both rotation AND translation (but no scaling).
 	//   The following is a good resource for the theory:
 	//   https://www.willamette.edu/~gorr/classes/GeneralGraphics/Transforms/transforms2d.htm
-	//   and the following is a good resource for the actual equation to implement (look at equation 
-	//   3.33. Note that you'll need to switch the minus sign in that equation to a plus to account 
+	//   and the following is a good resource for the actual equation to implement (look at equation
+	//   3.33. Note that you'll need to switch the minus sign in that equation to a plus to account
 	//   for the fact that the map's y-axis actually points downwards.)
 	//   http://planning.cs.uiuc.edu/node99.html
 
-    double var_xx = std_landmark[0] * std_landmark[0];
-    double var_yy = std_landmark[1] * std_landmark[1];
+    double sum_w = 0.;
 
+    for(int i = 0; i<num_particles; i++) {
+        double w = 1.;
+
+        for(int obs_i = 0; obs_i < observations.size(); obs_i++) {
+            LandmarkObs obs = observations[obs_i];
+
+            // landmark transform
+            double trans_obs_x = particles[i].x + (obs.x * cos(particles[i].theta)) - (obs.y * sin(particles[i].theta));
+            double trans_obs_y = particles[i].y + (obs.x * sin(particles[i].theta)) + (obs.y * cos(particles[i].theta));
+
+            obs.x = trans_obs_x;
+            obs.y = trans_obs_y;
+
+            Map::single_landmark_s lm_b;
+            double short_lm = numeric_limits<double>::max();
+            for(int lm_i = 0; lm_i < map_landmarks.landmark_list.size(); lm_i++) {
+                Map::single_landmark_s lm = map_landmarks.landmark_list[lm_i];
+                double cur_dist = dist(obs.x, obs.y, lm.x_f, lm.y_f);
+                if(cur_dist < short_lm) {
+                    short_lm = cur_dist;
+                    lm_b = lm;
+                }
+            }
+
+            double numerator = exp(-0.5 *
+                                   (pow((obs.x - lm_b.x_f), 2) / pow(std_landmark[0], 2) +
+                                    pow((obs.y - lm_b.y_f), 2) / pow(std_landmark[1], 2)));
+            double denominator = 2 * M_PI * std_landmark[0] * std_landmark[1];
+            w *= numerator / denominator;
+        }
+        sum_w += w;
+        particles[i].weight = w;
+    }
+
+    for (int i = 0; i < num_particles; i++) {
+        particles[i].weight /= sum_w;
+        weights[i] = particles[i].weight;
+    }
 }
 
 void ParticleFilter::resample() {
 	// TODO: Resample particles with replacement with probability proportional to their weight. 
 	// NOTE: You may find std::discrete_distribution helpful here.
 	//   http://en.cppreference.com/w/cpp/numeric/random/discrete_distribution
+    random_device rd;
+    default_random_engine gen(rd());
+
+    discrete_distribution<> dist_particles(weights.begin(), weights.end());
+    vector<Particle> resampled_particles((unsigned long) num_particles);
+
+    for (int i = 0; i < num_particles; i++) {
+        resampled_particles[i] = particles[dist_particles(gen)];
+    }
+
+    particles = resampled_particles;
 
 }
 
